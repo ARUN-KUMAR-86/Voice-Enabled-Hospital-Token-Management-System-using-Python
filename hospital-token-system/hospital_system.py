@@ -1,0 +1,227 @@
+
+import cv2
+import sounddevice as sd
+import vosk
+import json
+import os
+import datetime
+import time
+from openpyxl import Workbook, load_workbook
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+import sys
+
+
+
+
+# ------------------------------------------------
+# 🧾 Ensure program runs only in TERMINAL
+# ------------------------------------------------
+if not sys.stdin.isatty():
+    print("⚠️ Please run this script in the TERMINAL window, not the OUTPUT panel.")
+    print("👉 In VS Code, click on 'Terminal' at the bottom and type:")
+    print("   python hospital_system.py")
+    sys.exit()
+
+
+
+
+# ------------------------------------------------
+# 🎤 Setup Vosk Voice Recognition (optional)
+# ------------------------------------------------
+voice_available = False
+if os.path.exists("model"):
+    try:
+        model = vosk.Model("model")
+        samplerate = 16000
+        voice_available = True
+    except Exception as e:
+        print("⚠️ Error loading Vosk model:", e)
+else:
+    print("⚠️ Voice model not found! Manual mode will be used.")
+
+
+
+
+def listen_voice(prompt):
+    print(prompt)
+    print("🎙️ Speak now...")
+    duration = 5
+    recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
+    sd.wait()
+    rec = vosk.KaldiRecognizer(model, samplerate)
+    rec.AcceptWaveform(recording.tobytes())
+    result = json.loads(rec.FinalResult())
+    text = result.get("text", "").strip().title()
+    if text:
+        print(f"✅ Heard: {text}")
+    else:
+        text = input("❌ Could not understand. Please type manually: ").title()
+    return text
+
+
+
+
+# ------------------------------------------------
+# 📸 Capture Patient Photo
+# ------------------------------------------------
+def take_photo(name):
+    cam = cv2.VideoCapture(0)
+    print("📸 Taking photo... Press SPACE to capture.")
+    while True:
+        ret, frame = cam.read()
+        cv2.imshow("Camera", frame)
+        if cv2.waitKey(1) & 0xFF == 32:  # SPACE key
+            filename = f"{name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            cv2.imwrite(filename, frame)
+            print(f"✅ Saved photo as {filename}")
+            break
+    cam.release()
+    cv2.destroyAllWindows()
+    return filename
+
+
+
+
+# ------------------------------------------------
+# 💾 Excel File Handling (auto new file each day)
+# ------------------------------------------------
+def get_excel_filename():
+    """Create a new Excel file each day (e.g., hospital_data_01-11-2025.xlsx)"""
+    today_str = datetime.date.today().strftime("%d-%m-%Y")
+    return f"hospital_data_{today_str}.xlsx"
+
+
+
+
+def get_next_token(filename):
+    """Get next token number from today's Excel file"""
+    if not os.path.exists(filename):
+        return 1
+    wb = load_workbook(filename)
+    ws = wb.active
+    return ws.max_row  # Each patient = 1 row
+
+
+
+
+def save_to_excel(data, filename):
+    """Save patient record to today's Excel file (no photo column, token first)"""
+    if os.path.exists(filename):
+        wb = load_workbook(filename)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Token", "Name", "Age", "Department", "Date (DD-MM-YYYY)", "Time (HH:MM:SS)"])
+
+
+    ws.append(data)
+    wb.save(filename)
+    print(f"💾 Data saved to {filename}")
+
+
+
+
+# ------------------------------------------------
+# 🧾 PDF Receipt Generation
+# ------------------------------------------------
+def create_pdf_receipt(name, age, dept, token, photo):
+    pdf_name = f"receipt_{token}.pdf"
+    c = canvas.Canvas(pdf_name, pagesize=A4)
+    width, height = A4
+
+
+    # Title
+    c.setFont("Helvetica-Bold", 18)
+    c.drawCentredString(width / 2, height - 80, "🏥 HOSPITAL TOKEN RECEIPT 🏥")
+    c.line(80, height - 90, width - 80, height - 90)
+
+
+    # Details
+    c.setFont("Helvetica", 12)
+    y = height - 130
+    c.drawString(100, y, f"Name       : {name}")
+    c.drawString(100, y - 20, f"Age        : {age}")
+    c.drawString(100, y - 40, f"Department : {dept}")
+    c.drawString(100, y - 60, f"Token No.  : {token}")
+    c.drawString(100, y - 80, f"Date       : {datetime.date.today().strftime('%d-%m-%Y')}")
+    c.drawString(100, y - 100, f"Time       : {datetime.datetime.now().strftime('%H:%M:%S')}")
+
+
+    # Add patient photo (if available)
+    try:
+        c.drawImage(photo, width - 220, y - 60, 100, 100)
+    except:
+        c.drawString(100, y - 120, "⚠️ Photo not found")
+
+
+    # Footer
+    c.line(80, y - 140, width - 80, y - 140)
+    c.setFont("Helvetica-Oblique", 12)
+    c.drawCentredString(width / 2, y - 180, "Get well soon ❤️")
+
+
+    c.save()
+    print(f"🧾 PDF Receipt created: {pdf_name}")
+
+
+
+
+# ------------------------------------------------
+# 🏥 Main Loop (24-hour operation)
+# ------------------------------------------------
+def main():
+    print("🏥 Welcome to Hospital Token System 🏥")
+
+
+    while True:
+        elder = input("\nIs the patient an elder person? (yes/no or 'exit' to stop): ").strip().lower()
+
+
+        if elder == "exit":
+            print("👋 System shutting down. Goodbye!")
+            break
+
+
+        if elder == "yes" and voice_available:
+            print("🎤 Voice mode enabled for elder patient.")
+            name = listen_voice("Please tell your name:")
+            age = listen_voice("Please tell your age:")
+            dept = listen_voice("Which department? (Pediatrician, Ortho, General, etc.):")
+        else:
+            name = input("Enter patient name: ").title()
+            age = input("Enter patient age: ").strip()
+            dept = input("Enter department (Pediatrician, Ortho, General, etc.): ").title()
+
+
+        excel_file = get_excel_filename()
+        token = get_next_token(excel_file)
+        photo = take_photo(name)
+
+
+        now = datetime.datetime.now()
+        date_str = now.strftime("%d-%m-%Y")
+        time_str = now.strftime("%H:%M:%S")
+
+
+        # Save Excel: Token first, no photo column
+        save_to_excel([token, name, age, dept, date_str, time_str], excel_file)
+
+
+        # Create PDF receipt
+        create_pdf_receipt(name, age, dept, token, photo)
+
+
+        print(f"✅ Patient registered successfully! Token number: {token}")
+        print("🕒 Ready for next patient...\n")
+        time.sleep(2)
+
+
+
+
+# ------------------------------------------------
+# 🚀 Run the system
+# ------------------------------------------------
+if __name__ == "__main__":
+    main()
