@@ -1,0 +1,6 @@
+opencv-python
+sounddevice
+vosk
+openpyxl
+reportlab
+numpy
